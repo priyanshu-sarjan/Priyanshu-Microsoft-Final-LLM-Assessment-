@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.env
+build_dataset.py
+pipeline_test.py
+generate_artifacts.py
