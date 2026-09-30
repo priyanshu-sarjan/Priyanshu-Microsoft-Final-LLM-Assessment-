@@ -1,0 +1,332 @@
+import json
+import os
+import subprocess
+
+# Define the exact cells requested by the user
+cells = [
+    {
+        "cell_type": "markdown",
+        "metadata": {},
+        "source": [
+            "# Employee Sentiment Analysis & Retention Risk Modeling\n",
+            "**Author**: Priyanshu Sarjan  \n",
+            "**Assessment**: Microsoft / Glynac AI Assessment Submission"
+        ]
+    },
+    {
+        "cell_type": "markdown",
+        "metadata": {},
+        "source": [
+            "### Cell 1: Environment Setup & Data Loading"
+        ]
+    },
+    {
+        "cell_type": "code",
+        "execution_count": None,
+        "metadata": {},
+        "outputs": [],
+        "source": [
+            "import pandas as pd\n",
+            "import numpy as np\n",
+            "import matplotlib.pyplot as plt\n",
+            "import seaborn as sns\n",
+            "import os\n",
+            "import re\n",
+            "\n",
+            "# Set plot style and output directory\n",
+            "plt.style.use('ggplot')\n",
+            "os.makedirs('../visualizations', exist_ok=True)\n",
+            "\n",
+            "# Load raw dataset\n",
+            "df = pd.read_csv('../data/test.csv')\n",
+            "\n",
+            "# Clean headers and inspect columns: expected ['Subject', 'body', 'date', 'from']\n",
+            "df.columns = [c.strip() for c in df.columns]\n",
+            "\n",
+            "# Basic cleaning\n",
+            "df['body'] = df['body'].fillna('').astype(str)\n",
+            "df['Subject'] = df['Subject'].fillna('').astype(str)\n",
+            "df['from'] = df['from'].fillna('Unknown').astype(str).str.strip().str.lower()\n",
+            "\n",
+            "# Parse datetime safely\n",
+            "df['date'] = pd.to_datetime(df['date'], errors='coerce')\n",
+            "df = df.dropna(subset=['date']).copy()\n",
+            "df['year_month'] = df['date'].dt.to_period('M')\n",
+            "\n",
+            "print(\"Total records loaded:\", len(df))\n"
+        ]
+    },
+    {
+        "cell_type": "markdown",
+        "metadata": {},
+        "source": [
+            "### Task 1: Sentiment Labeling (Positive, Negative, Neutral)"
+        ]
+    },
+    {
+        "cell_type": "code",
+        "execution_count": None,
+        "metadata": {},
+        "outputs": [],
+        "source": [
+            "import nltk\n",
+            "from nltk.sentiment.vader import SentimentIntensityAnalyzer\n",
+            "\n",
+            "nltk.download('vader_lexicon', quiet=True)\n",
+            "sia = SentimentIntensityAnalyzer()\n",
+            "\n",
+            "def get_sentiment_label(text):\n",
+            "    if not text.strip():\n",
+            "        return 'Neutral'\n",
+            "    score = sia.polarity_scores(text)['compound']\n",
+            "    if score >= 0.05:\n",
+            "        return 'Positive'\n",
+            "    elif score <= -0.05:\n",
+            "        return 'Negative'\n",
+            "    else:\n",
+            "        return 'Neutral'\n",
+            "\n",
+            "# Combine Subject and body for full context\n",
+            "df['full_text'] = df['Subject'] + \" \" + df['body']\n",
+            "df['sentiment'] = df['full_text'].apply(get_sentiment_label)\n",
+            "\n",
+            "# Save augmented dataset\n",
+            "df.to_csv('../data/test_labeled.csv', index=False)\n",
+            "print(\"Sentiment distribution:\\n\", df['sentiment'].value_counts())\n"
+        ]
+    },
+    {
+        "cell_type": "markdown",
+        "metadata": {},
+        "source": [
+            "### Task 2: Exploratory Data Analysis (EDA) & Visualizations"
+        ]
+    },
+    {
+        "cell_type": "code",
+        "execution_count": None,
+        "metadata": {},
+        "outputs": [],
+        "source": [
+            "# 1. Overall sentiment distribution\n",
+            "plt.figure(figsize=(7, 4))\n",
+            "sns.countplot(data=df, x='sentiment', order=['Positive', 'Neutral', 'Negative'], palette='coolwarm')\n",
+            "plt.title('Distribution of Message Sentiments')\n",
+            "plt.xlabel('Sentiment')\n",
+            "plt.ylabel('Message Count')\n",
+            "plt.tight_layout()\n",
+            "plt.savefig('../visualizations/sentiment_distribution.png')\n",
+            "plt.show()\n",
+            "\n",
+            "# 2. Monthly sentiment breakdown\n",
+            "monthly_sentiment = df.groupby(['year_month', 'sentiment']).size().unstack(fill_value=0)\n",
+            "monthly_sentiment.plot(kind='bar', stacked=True, figsize=(12, 5), colormap='viridis')\n",
+            "plt.title('Monthly Sentiment Volume Over Time')\n",
+            "plt.xlabel('Month')\n",
+            "plt.ylabel('Number of Messages')\n",
+            "plt.xticks(rotation=45)\n",
+            "plt.tight_layout()\n",
+            "plt.savefig('../visualizations/monthly_sentiment_trend.png')\n",
+            "plt.show()\n"
+        ]
+    },
+    {
+        "cell_type": "markdown",
+        "metadata": {},
+        "source": [
+            "### Task 3: Employee Monthly Sentiment Scoring"
+        ]
+    },
+    {
+        "cell_type": "code",
+        "execution_count": None,
+        "metadata": {},
+        "outputs": [],
+        "source": [
+            "# Assign point score per requirement\n",
+            "sentiment_weight = {'Positive': 1, 'Negative': -1, 'Neutral': 0}\n",
+            "df['score_weight'] = df['sentiment'].map(sentiment_weight)\n",
+            "\n",
+            "# Aggregate monthly by employee\n",
+            "monthly_scores = df.groupby(['from', 'year_month'])['score_weight'].agg(\n",
+            "    monthly_score='sum',\n",
+            "    total_messages='count'\n",
+            ").reset_index()\n",
+            "\n",
+            "print(monthly_scores.head(10))\n"
+        ]
+    },
+    {
+        "cell_type": "markdown",
+        "metadata": {},
+        "source": [
+            "### Task 4: Employee Ranking (Top 3 Positive & Negative)"
+        ]
+    },
+    {
+        "cell_type": "code",
+        "execution_count": None,
+        "metadata": {},
+        "outputs": [],
+        "source": [
+            "rankings_summary = []\n",
+            "\n",
+            "for ym, group in monthly_scores.groupby('year_month'):\n",
+            "    # Sort: descending by monthly_score, then alphabetical by 'from'\n",
+            "    sorted_group = group.sort_values(by=['monthly_score', 'from'], ascending=[False, True])\n",
+            "    \n",
+            "    # Top 3 positive employees\n",
+            "    top_3_pos = sorted_group.head(3).copy()\n",
+            "    top_3_pos['category'] = 'Top 3 Positive'\n",
+            "    \n",
+            "    # Top 3 negative employees (lowest scores)\n",
+            "    # Sort ascending for lowest scores, then alphabetical by 'from'\n",
+            "    sorted_asc = group.sort_values(by=['monthly_score', 'from'], ascending=[True, True])\n",
+            "    top_3_neg = sorted_asc.head(3).copy()\n",
+            "    top_3_neg['category'] = 'Top 3 Negative'\n",
+            "    \n",
+            "    rankings_summary.extend([top_3_pos, top_3_neg])\n",
+            "\n",
+            "employee_rankings = pd.concat(rankings_summary, ignore_index=True)\n",
+            "\n",
+            "# Export sample ranking plot\n",
+            "plt.figure(figsize=(10, 4))\n",
+            "sample_month = monthly_scores['year_month'].mode()[0]\n",
+            "sample_rank = monthly_scores[monthly_scores['year_month'] == sample_month].sort_values(by='monthly_score')\n",
+            "sns.barplot(data=sample_rank.head(5), x='from', y='monthly_score', palette='Reds_r')\n",
+            "plt.title(f'Most Negative Employees for Period {sample_month}')\n",
+            "plt.xticks(rotation=30, ha='right')\n",
+            "plt.tight_layout()\n",
+            "plt.savefig('../visualizations/top_negative_employees.png')\n",
+            "plt.show()\n",
+            "\n",
+            "# Top Positive Employees Plot\n",
+            "plt.figure(figsize=(10, 4))\n",
+            "sample_rank_pos = monthly_scores[monthly_scores['year_month'] == sample_month].sort_values(by='monthly_score', ascending=False)\n",
+            "sns.barplot(data=sample_rank_pos.head(5), x='from', y='monthly_score', palette='Greens_r')\n",
+            "plt.title(f'Top Positive Employees for Period {sample_month}')\n",
+            "plt.xticks(rotation=30, ha='right')\n",
+            "plt.tight_layout()\n",
+            "plt.savefig('../visualizations/top_positive_employees.png')\n",
+            "plt.show()\n"
+        ]
+    },
+    {
+        "cell_type": "markdown",
+        "metadata": {},
+        "source": [
+            "### Task 5: Flight Risk Identification (Rolling 30-Day Window)"
+        ]
+    },
+    {
+        "cell_type": "code",
+        "execution_count": None,
+        "metadata": {},
+        "outputs": [],
+        "source": [
+            "flight_risks = set()\n",
+            "flight_risk_details = []\n",
+            "\n",
+            "negative_df = df[df['sentiment'] == 'Negative'].sort_values('date').copy()\n",
+            "\n",
+            "for emp, emp_group in negative_df.groupby('from'):\n",
+            "    # Set date as index to run rolling 30-day window\n",
+            "    indexed = emp_group.set_index('date').sort_index()\n",
+            "    # Count negative messages in a 30-day rolling window\n",
+            "    rolling_counts = indexed['score_weight'].rolling('30D').count()\n",
+            "    \n",
+            "    if (rolling_counts >= 4).any():\n",
+            "        flight_risks.add(emp)\n",
+            "        max_in_30d = int(rolling_counts.max())\n",
+            "        flight_risk_details.append({'employee': emp, 'max_negative_30d': max_in_30d})\n",
+            "\n",
+            "flight_risk_summary = pd.DataFrame(flight_risk_details)\n",
+            "print(f\"Total Flight Risks Identified: {len(flight_risks)}\")\n",
+            "print(flight_risk_summary)\n"
+        ]
+    },
+    {
+        "cell_type": "markdown",
+        "metadata": {},
+        "source": [
+            "### Task 6: Predictive Modeling (Linear Regression)"
+        ]
+    },
+    {
+        "cell_type": "code",
+        "execution_count": None,
+        "metadata": {},
+        "outputs": [],
+        "source": [
+            "from sklearn.model_selection import train_test_split\n",
+            "from sklearn.linear_model import LinearRegression\n",
+            "from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error\n",
+            "\n",
+            "# 1. Feature Engineering per message\n",
+            "df['char_length'] = df['full_text'].apply(len)\n",
+            "df['word_count'] = df['full_text'].apply(lambda x: len(x.split()))\n",
+            "df['is_negative'] = (df['sentiment'] == 'Negative').astype(int)\n",
+            "df['is_positive'] = (df['sentiment'] == 'Positive').astype(int)\n",
+            "\n",
+            "# 2. Aggregate monthly metrics per employee\n",
+            "monthly_features = df.groupby(['from', 'year_month']).agg(\n",
+            "    total_messages=('full_text', 'count'),\n",
+            "    avg_char_length=('char_length', 'mean'),\n",
+            "    avg_word_count=('word_count', 'mean'),\n",
+            "    negative_count=('is_negative', 'sum'),\n",
+            "    positive_count=('is_positive', 'sum'),\n",
+            "    target_score=('score_weight', 'sum')  # Dependent variable\n",
+            ").reset_index()\n",
+            "\n",
+            "# 3. Model Preparation\n",
+            "X = monthly_features[['total_messages', 'avg_char_length', 'avg_word_count', 'negative_count']]\n",
+            "y = monthly_features['target_score']\n",
+            "\n",
+            "X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)\n",
+            "\n",
+            "# 4. Train Model\n",
+            "model = LinearRegression()\n",
+            "model.fit(X_train, y_train)\n",
+            "\n",
+            "# 5. Evaluate\n",
+            "y_pred = model.predict(X_test)\n",
+            "print(f\"R² Score: {r2_score(y_test, y_pred):.4f}\")\n",
+            "print(f\"MAE: {mean_absolute_error(y_test, y_pred):.4f}\")\n",
+            "print(f\"RMSE: {np.sqrt(mean_squared_error(y_test, y_pred)):.4f}\")\n",
+            "\n",
+            "# 6. Plot & Save Regression Fit\n",
+            "plt.figure(figsize=(7, 5))\n",
+            "plt.scatter(y_test, y_pred, alpha=0.6, color='dodgerblue')\n",
+            "plt.plot([y.min(), y.max()], [y.min(), y.max()], 'r--', lw=2)\n",
+            "plt.title('Actual vs Predicted Monthly Sentiment Score')\n",
+            "plt.xlabel('Actual Score')\n",
+            "plt.ylabel('Predicted Score')\n",
+            "plt.tight_layout()\n",
+            "plt.savefig('../visualizations/linear_regression_fit.png')\n",
+            "plt.show()\n"
+        ]
+    }
+]
+
+nb_dict = {
+    "cells": cells,
+    "metadata": {
+        "kernelspec": {
+            "display_name": "Python 3",
+            "language": "python",
+            "name": "python3"
+        },
+        "language_info": {
+            "name": "python",
+            "version": "3.10.0"
+        }
+    },
+    "nbformat": 4,
+    "nbformat_minor": 4
+}
+
+nb_path = 'd:/Downloads/Projects/Final LLM Assessment/employee-sentiment-analysis/notebooks/Employee_Sentiment_Analysis.ipynb'
+with open(nb_path, 'w', encoding='utf-8') as f:
+    json.dump(nb_dict, f, indent=2)
+
+print("Saved exact notebook cells requested by user.")
